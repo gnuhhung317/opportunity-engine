@@ -1,9 +1,33 @@
 import { GoogleGenAI, Type, Schema } from "@google/genai";
 import { UserProfile, Opportunity, MarketScanResult, SpyReport } from "../types";
 
-// Initialize Gemini Client
-// @ts-ignore
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+let ai: GoogleGenAI | null = null;
+
+// Helper to check if a key is available without throwing
+export const hasValidApiKey = (): boolean => {
+  const key = localStorage.getItem("gemini_api_key") || process.env.API_KEY;
+  return !!key && key !== "undefined" && key.trim() !== "";
+};
+
+// Helper to reset the client (e.g. when key changes)
+export const resetAiClient = () => {
+  ai = null;
+};
+
+// Lazy initialization of the Gemini Client
+const getAiClient = (): GoogleGenAI => {
+  if (ai) return ai;
+
+  const key = localStorage.getItem("gemini_api_key") || process.env.API_KEY;
+
+  if (!key || key === "undefined" || key.trim() === "") {
+    throw new Error("API_KEY_MISSING");
+  }
+
+  // @ts-ignore
+  ai = new GoogleGenAI({ apiKey: key });
+  return ai;
+};
 
 // Define the Schema for the Output
 const opportunitySchema: Schema = {
@@ -93,7 +117,8 @@ export const parseUserProfile = async (text: string): Promise<Partial<UserProfil
     }
   };
 
-  const response = await ai.models.generateContent({
+  const client = getAiClient();
+  const response = await client.models.generateContent({
     model: modelId,
     contents: prompt,
     config: {
@@ -151,7 +176,8 @@ export const discoverNextOpportunity = async (
 
   onLog?.("Investigating market demand for lateral concept...");
 
-  const searchResponse = await ai.models.generateContent({
+  const client = getAiClient();
+  const searchResponse = await client.models.generateContent({
     model: modelIdSearch,
     contents: searchPrompt,
     config: {
@@ -183,7 +209,7 @@ export const discoverNextOpportunity = async (
     4. If Match Score is 60-80%, generate a 'Learning Bridge'.
   `;
 
-  const synthesisResponse = await ai.models.generateContent({
+  const synthesisResponse = await client.models.generateContent({
     model: modelIdReasoning,
     contents: synthesisPrompt,
     config: {
@@ -223,8 +249,10 @@ export const analyzeCompetitors = async (opportunity: Opportunity, onLog?: (msg:
 
   onLog?.("Spy Agent searching Google, Reddit & ProductHunt...");
 
+  const client = getAiClient();
+
   // Step 1: Search for competitor info
-  const searchResponse = await ai.models.generateContent({
+  const searchResponse = await client.models.generateContent({
     model: modelId,
     contents: searchPrompt,
     config: {
@@ -254,7 +282,7 @@ export const analyzeCompetitors = async (opportunity: Opportunity, onLog?: (msg:
 
   onLog?.("Valuation Engine calculating ROI & Effort...");
 
-  const analysisResponse = await ai.models.generateContent({
+  const analysisResponse = await client.models.generateContent({
     model: modelId,
     contents: analysisPrompt,
     config: {
