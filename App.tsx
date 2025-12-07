@@ -3,7 +3,6 @@ import Layout from './components/Layout';
 import Onboarding from './components/Onboarding';
 import Dashboard from './components/Dashboard';
 import { UserProfile } from './types';
-import { Analytics } from '@vercel/analytics/react';
 
 const App: React.FC = () => {
   const [user, setUser] = useState<UserProfile | null>(null);
@@ -48,7 +47,6 @@ const App: React.FC = () => {
           initialData={user || undefined}
         />
       )}
-      <Analytics />
     </Layout>
   );
 };
