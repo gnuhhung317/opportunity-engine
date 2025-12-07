@@ -3,9 +3,11 @@ import Layout from './components/Layout';
 import Onboarding from './components/Onboarding';
 import Dashboard from './components/Dashboard';
 import { UserProfile } from './types';
+import { Analytics } from '@vercel/analytics/react';
 
 const App: React.FC = () => {
   const [user, setUser] = useState<UserProfile | null>(null);
+  const [isEditing, setIsEditing] = useState(false);
   const [loading, setLoading] = useState(true);
 
   // Load user from local storage
@@ -25,14 +27,11 @@ const App: React.FC = () => {
   const handleOnboardingComplete = (profile: UserProfile) => {
     setUser(profile);
     localStorage.setItem('user_profile', JSON.stringify(profile));
+    setIsEditing(false);
   };
 
-  const handleReset = () => {
-    if (window.confirm("Are you sure? This will delete your profile and opportunity history.")) {
-      setUser(null);
-      localStorage.removeItem('user_profile');
-      localStorage.removeItem('last_scan');
-    }
+  const handleEditProfile = () => {
+    setIsEditing(true);
   };
 
   if (loading) {
@@ -40,12 +39,16 @@ const App: React.FC = () => {
   }
 
   return (
-    <Layout user={user} onReset={handleReset}>
-      {user ? (
+    <Layout user={user} onEditProfile={handleEditProfile} isEditing={isEditing}>
+      {user && !isEditing ? (
         <Dashboard user={user} />
       ) : (
-        <Onboarding onComplete={handleOnboardingComplete} />
+        <Onboarding 
+          onComplete={handleOnboardingComplete} 
+          initialData={user || undefined}
+        />
       )}
+      <Analytics />
     </Layout>
   );
 };

@@ -1,12 +1,13 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { UserProfile } from '../types';
 import { parseUserProfile } from '../services/geminiService';
 
 interface OnboardingProps {
   onComplete: (profile: UserProfile) => void;
+  initialData?: UserProfile;
 }
 
-const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
+const Onboarding: React.FC<OnboardingProps> = ({ onComplete, initialData }) => {
   const [formData, setFormData] = useState<UserProfile>({
     name: '',
     coreSkills: '',
@@ -15,6 +16,12 @@ const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
     interests: '',
     platformTarget: ''
   });
+
+  useEffect(() => {
+    if (initialData) {
+      setFormData(initialData);
+    }
+  }, [initialData]);
 
   const [isParsing, setIsParsing] = useState(false);
   const [rawInput, setRawInput] = useState('');
@@ -59,9 +66,11 @@ const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
   return (
     <div className="max-w-2xl mx-auto pt-10 pb-10">
       <div className="text-center mb-10">
-        <h2 className="text-3xl font-bold text-white mb-2">Initialize Your Digital Twin</h2>
+        <h2 className="text-3xl font-bold text-white mb-2">
+          {initialData ? "Recalibrate Your Digital Twin" : "Initialize Your Digital Twin"}
+        </h2>
         <p className="text-slate-400">
-          Tell us what you have. We'll find who needs it.
+          {initialData ? "Update your parameters to find better matches." : "Tell us what you have. We'll find who needs it."}
         </p>
       </div>
 
@@ -190,7 +199,7 @@ const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
               type="submit"
               className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-4 rounded-lg shadow-lg shadow-emerald-900/50 transition-all transform hover:scale-[1.01] active:scale-[0.99]"
             >
-              Activate Engine
+              {initialData ? "Update Profile" : "Activate Engine"}
             </button>
           </div>
         </form>

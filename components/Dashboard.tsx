@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
-import { UserProfile, MarketScanResult, Opportunity } from '../types';
-import { scanMarketOpportunities, analyzeCompetitors } from '../services/geminiService';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { UserProfile, Opportunity } from '../types';
+import { discoverNextOpportunity, analyzeCompetitors } from '../services/geminiService';
 import OpportunityCard from './OpportunityCard';
 
 interface DashboardProps {
@@ -10,37 +10,108 @@ interface DashboardProps {
 type SortOption = 'match' | 'roi';
 
 const Dashboard: React.FC<DashboardProps> = ({ user }) => {
-  const [scanResult, setScanResult] = useState<MarketScanResult | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [opportunities, setOpportunities] = useState<Opportunity[]>([]);
+  const [sources, setSources] = useState<{ title: string; uri: string }[]>([]);
+  
+  // Engine State
+  const [isScanning, setIsScanning] = useState(false);
+  const [scanLogs, setScanLogs] = useState<string[]>([]);
+  
+  // UI State
   const [activeTab, setActiveTab] = useState<'radar' | 'lab'>('radar');
   const [sortOption, setSortOption] = useState<SortOption>('match');
-  const [error, setError] = useState<string | null>(null);
   const [spyingIds, setSpyingIds] = useState<Set<string>>(new Set());
+  const [spyLogs, setSpyLogs] = useState<Record<string, string[]>>({});
+  
+  const logsEndRef = useRef<HTMLDivElement>(null);
 
-  // Load last scan from local storage on mount
+  // Auto scroll logs
   useEffect(() => {
-    const savedScan = localStorage.getItem('last_scan');
-    if (savedScan) {
+    if (logsEndRef.current) {
+      logsEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [scanLogs]);
+
+  // Load history from local storage
+  useEffect(() => {
+    const savedOps = localStorage.getItem('opp_history');
+    if (savedOps) {
       try {
-        setScanResult(JSON.parse(savedScan));
-      } catch (e) {
-        console.error("Failed to load saved scan");
-      }
+        setOpportunities(JSON.parse(savedOps));
+      } catch (e) { console.error(e); }
+    }
+    const savedSources = localStorage.getItem('source_history');
+    if (savedSources) {
+      try {
+        setSources(JSON.parse(savedSources));
+      } catch (e) { console.error(e); }
     }
   }, []);
 
-  const handleScan = async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const result = await scanMarketOpportunities(user);
-      setScanResult(result);
-      localStorage.setItem('last_scan', JSON.stringify(result));
-    } catch (err) {
-      console.error(err);
-      setError("Failed to scan the market. Please check your API key and try again.");
-    } finally {
-      setLoading(false);
+  // Save history on change
+  useEffect(() => {
+    localStorage.setItem('opp_history', JSON.stringify(opportunities));
+  }, [opportunities]);
+
+  useEffect(() => {
+    localStorage.setItem('source_history', JSON.stringify(sources));
+  }, [sources]);
+
+  // CONTINUOUS DISCOVERY LOOP
+  useEffect(() => {
+    let timeoutId: NodeJS.Timeout;
+
+    const engineLoop = async () => {
+      if (!isScanning) return;
+
+      try {
+        // Collect existing titles to avoid duplicates
+        const existingTitles = opportunities.map(o => o.title);
+        
+        // Call the single-shot discovery agent
+        const result = await discoverNextOpportunity(user, existingTitles, (msg) => {
+          setScanLogs(prev => [...prev.slice(-4), msg]); // Keep last 5 logs
+        });
+
+        // Add the new opportunity to the TOP of the list (Stream-like)
+        setOpportunities(prev => [result.opportunity, ...prev]);
+        
+        if (result.source) {
+          setSources(prev => {
+            // Avoid duplicate sources
+            if (prev.some(s => s.uri === result.source!.uri)) return prev;
+            return [result.source!, ...prev];
+          });
+        }
+
+        // Wait a bit before next thought to allow user to read logs and respect rate limits
+        if (isScanning) {
+           timeoutId = setTimeout(engineLoop, 4000); 
+        }
+
+      } catch (error) {
+        console.error("Engine hiccup:", error);
+        setScanLogs(prev => [...prev, "Connection interruption. Retrying..."]);
+        if (isScanning) {
+          timeoutId = setTimeout(engineLoop, 5000);
+        }
+      }
+    };
+
+    if (isScanning) {
+      engineLoop();
+    }
+
+    return () => clearTimeout(timeoutId);
+  }, [isScanning, user, opportunities]); // Dependencies are crucial here
+
+  const toggleEngine = () => {
+    if (isScanning) {
+      setIsScanning(false);
+      setScanLogs(prev => [...prev, "Engine Paused."]);
+    } else {
+      setIsScanning(true);
+      setScanLogs(["Engine Started. Initializing Continuous Discovery Protocol..."]);
     }
   };
 
@@ -48,23 +119,22 @@ const Dashboard: React.FC<DashboardProps> = ({ user }) => {
     if (spyingIds.has(opportunity.id)) return;
 
     setSpyingIds(prev => new Set(prev).add(opportunity.id));
+    setSpyLogs(prev => ({ ...prev, [opportunity.id]: [] }));
     
     try {
-      const report = await analyzeCompetitors(opportunity);
+      const report = await analyzeCompetitors(opportunity, (msg) => {
+        setSpyLogs(prev => ({
+           ...prev,
+           [opportunity.id]: [...(prev[opportunity.id] || []), msg]
+        }));
+      });
       
-      // Update the specific opportunity in the scan result
-      if (scanResult) {
-        const updatedOpportunities = scanResult.opportunities.map(op => 
-          op.id === opportunity.id ? { ...op, spyReport: report } : op
-        );
-        
-        const updatedResult = { ...scanResult, opportunities: updatedOpportunities };
-        setScanResult(updatedResult);
-        localStorage.setItem('last_scan', JSON.stringify(updatedResult));
-      }
+      setOpportunities(prev => prev.map(op => 
+        op.id === opportunity.id ? { ...op, spyReport: report } : op
+      ));
+
     } catch (err) {
       console.error("Spy failed", err);
-      // Optional: show a toast error
     } finally {
       setSpyingIds(prev => {
         const newSet = new Set(prev);
@@ -74,12 +144,11 @@ const Dashboard: React.FC<DashboardProps> = ({ user }) => {
     }
   };
 
-  const getSortedOpportunities = (opportunities: Opportunity[]) => {
-    return [...opportunities].sort((a, b) => {
+  const getSortedOpportunities = (ops: Opportunity[]) => {
+    return [...ops].sort((a, b) => {
       if (sortOption === 'roi') {
         const roiA = a.spyReport?.valuation?.dollarPerHour || 0;
         const roiB = b.spyReport?.valuation?.dollarPerHour || 0;
-        // If neither has ROI, fall back to match score
         if (roiA === 0 && roiB === 0) return b.matchScore - a.matchScore;
         return roiB - roiA;
       }
@@ -87,27 +156,28 @@ const Dashboard: React.FC<DashboardProps> = ({ user }) => {
     });
   };
 
-  const allOpportunities = scanResult?.opportunities || [];
-  const sortedOpportunities = getSortedOpportunities(allOpportunities);
-  
-  // Filter for tabs
+  const sortedOpportunities = getSortedOpportunities(opportunities);
   const radarItems = sortedOpportunities; 
   const labItems = sortedOpportunities.filter(o => o.type === 'Micro-SaaS' || o.type === 'DigitalProduct');
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-8 pb-20">
       {/* Header Actions */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 sticky top-0 bg-slate-900/95 backdrop-blur z-20 py-4 border-b border-slate-800 -mx-4 px-4 md:-mx-8 md:px-8">
         <div>
-          <h2 className="text-2xl font-bold text-white">Mission Control</h2>
+          <h2 className="text-2xl font-bold text-white flex items-center">
+             Mission Control
+             {isScanning && <span className="ml-3 flex h-3 w-3 relative">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
+             </span>}
+          </h2>
           <p className="text-slate-400 text-sm">
-            {scanResult 
-              ? `Last Market Scan: ${new Date(scanResult.scannedAt).toLocaleDateString()} ${new Date(scanResult.scannedAt).toLocaleTimeString()}`
-              : "No market data analyzed yet."}
+            {opportunities.length} opportunities found. {isScanning ? "Engine is Thinking..." : "Engine is Idle."}
           </p>
         </div>
         <div className="flex items-center space-x-4">
-          {scanResult && (
+          {opportunities.length > 0 && (
              <select 
                value={sortOption} 
                onChange={(e) => setSortOption(e.target.value as SortOption)}
@@ -119,41 +189,48 @@ const Dashboard: React.FC<DashboardProps> = ({ user }) => {
           )}
 
           <button
-            onClick={handleScan}
-            disabled={loading}
-            className={`px-6 py-3 rounded-lg font-bold text-sm flex items-center justify-center space-x-2 transition-all ${
-              loading 
-                ? 'bg-slate-800 text-slate-500 cursor-not-allowed' 
-                : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg shadow-emerald-900/50'
+            onClick={toggleEngine}
+            className={`px-6 py-3 rounded-lg font-bold text-sm flex items-center justify-center space-x-2 transition-all shadow-lg ${
+              isScanning 
+                ? 'bg-red-500/10 hover:bg-red-500/20 text-red-500 border border-red-500/50' 
+                : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-900/50'
             }`}
           >
-            {loading ? (
+            {isScanning ? (
               <>
-                <svg className="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                </svg>
-                <span>Scanning Market...</span>
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                <span>Stop Engine</span>
               </>
             ) : (
               <>
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                </svg>
-                <span>Scan New Opportunities</span>
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                <span>Start Discovery Engine</span>
               </>
             )}
           </button>
         </div>
       </div>
 
-      {error && (
-        <div className="p-4 bg-red-900/50 border border-red-800 rounded-lg text-red-200 text-sm">
-          {error}
+      {/* LOGGING TERMINAL (Always visible when scanning or logs exist) */}
+      {(isScanning || scanLogs.length > 0) && (
+        <div className="bg-slate-950 border border-slate-800 rounded-lg p-4 font-mono text-sm h-32 overflow-y-auto shadow-inner transition-all">
+          <div className="flex items-center space-x-2 border-b border-slate-800 pb-2 mb-2">
+             <span className="text-slate-500 text-xs uppercase tracking-wider">Neural Stream</span>
+          </div>
+          <div className="space-y-1">
+            {scanLogs.map((log, i) => (
+              <div key={i} className="flex space-x-2 animate-fadeIn text-xs md:text-sm">
+                <span className="text-emerald-500">➜</span>
+                <span className="text-slate-300">{log}</span>
+              </div>
+            ))}
+            <div ref={logsEndRef}></div>
+            {isScanning && <div className="animate-pulse text-emerald-500 text-xs">Processing...</div>}
+          </div>
         </div>
       )}
 
-      {/* Tabs */}
+      {/* TABS */}
       <div className="border-b border-slate-800">
         <nav className="-mb-px flex space-x-8">
           <button
@@ -164,7 +241,7 @@ const Dashboard: React.FC<DashboardProps> = ({ user }) => {
                 : 'border-transparent text-slate-400 hover:text-slate-300 hover:border-slate-700'
             }`}
           >
-            My Radar <span className="ml-2 bg-slate-800 text-slate-300 py-0.5 px-2 rounded-full text-xs">{radarItems.length}</span>
+            Live Radar <span className="ml-2 bg-slate-800 text-slate-300 py-0.5 px-2 rounded-full text-xs">{radarItems.length}</span>
           </button>
           <button
             onClick={() => setActiveTab('lab')}
@@ -181,46 +258,32 @@ const Dashboard: React.FC<DashboardProps> = ({ user }) => {
 
       {/* Content Area */}
       <div className="min-h-[400px]">
-        {!scanResult && !loading && (
-          <div className="flex flex-col items-center justify-center h-64 text-slate-500 bg-slate-900/30 rounded-xl border border-dashed border-slate-800">
+        {opportunities.length === 0 && !isScanning && (
+          <div className="flex flex-col items-center justify-center h-64 text-slate-500 bg-slate-900/30 rounded-xl border border-dashed border-slate-800 mt-8">
             <svg className="w-12 h-12 mb-4 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1" d="M13 10V3L4 14h7v7l9-11h-7z" />
             </svg>
-            <p>Ready to activate the Opportunity Engine?</p>
-            <p className="text-sm mt-1">Click "Scan New Opportunities" to begin.</p>
+            <p>Engine is on standby.</p>
+            <p className="text-sm mt-1">Click "Start Discovery Engine" to begin the search loop.</p>
           </div>
         )}
 
-        {loading && !scanResult && (
-           <div className="space-y-4">
-             {[1, 2, 3].map((i) => (
-               <div key={i} className="animate-pulse flex p-4 bg-slate-900 rounded-lg border border-slate-800 h-40">
-                 <div className="flex-1 space-y-4 py-1">
-                   <div className="h-4 bg-slate-800 rounded w-3/4"></div>
-                   <div className="space-y-2">
-                     <div className="h-4 bg-slate-800 rounded"></div>
-                     <div className="h-4 bg-slate-800 rounded w-5/6"></div>
-                   </div>
-                 </div>
-               </div>
-             ))}
-           </div>
-        )}
-
-        <div className="grid grid-cols-1 gap-6">
+        {/* Results */}
+        <div className="grid grid-cols-1 gap-6 pt-4">
           {activeTab === 'radar' && radarItems.map((op) => (
             <OpportunityCard 
               key={op.id} 
               opportunity={op} 
               onSpy={() => handleSpy(op)}
               isSpying={spyingIds.has(op.id)}
+              spyLogs={spyLogs[op.id] || []}
             />
           ))}
 
-          {activeTab === 'lab' && labItems.length === 0 && scanResult && (
-             <div className="p-8 text-center text-slate-500">
-                No product ideas found in this scan. Try scanning again or tweaking your skills.
-             </div>
+          {activeTab === 'lab' && labItems.length === 0 && opportunities.length > 0 && (
+              <div className="p-8 text-center text-slate-500">
+                The engine hasn't found specific Product/SaaS ideas yet. Keep it running.
+              </div>
           )}
 
           {activeTab === 'lab' && labItems.map((op) => (
@@ -230,19 +293,20 @@ const Dashboard: React.FC<DashboardProps> = ({ user }) => {
               isDetailed={true} 
               onSpy={() => handleSpy(op)}
               isSpying={spyingIds.has(op.id)}
+              spyLogs={spyLogs[op.id] || []}
             />
           ))}
         </div>
       </div>
       
       {/* Sources Footer */}
-      {scanResult?.sources && scanResult.sources.length > 0 && (
+      {sources.length > 0 && (
         <div className="mt-8 pt-6 border-t border-slate-800">
           <h4 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">
             Intelligence Sources
           </h4>
           <div className="flex flex-wrap gap-2">
-            {scanResult.sources.map((source, idx) => (
+            {sources.map((source, idx) => (
               <a 
                 key={idx}
                 href={source.uri}

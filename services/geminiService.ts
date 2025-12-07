@@ -9,45 +9,37 @@ const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 const opportunitySchema: Schema = {
   type: Type.OBJECT,
   properties: {
-    opportunities: {
+    title: { type: Type.STRING },
+    type: { type: Type.STRING, enum: ["Freelance", "Micro-SaaS", "DigitalProduct"] },
+    description: { type: Type.STRING },
+    matchScore: { type: Type.INTEGER, description: "Percentage match 0-100 based on user profile" },
+    matchReasoning: { type: Type.STRING, description: "Explain the transfer of skills (e.g. 'Since you know X, you can easily build Y')" },
+    estimatedValue: { type: Type.STRING, description: "E.g. $50/hr or $500/mo" },
+    platform: { type: Type.STRING },
+    actionPlan: {
       type: Type.ARRAY,
-      items: {
-        type: Type.OBJECT,
-        properties: {
-          title: { type: Type.STRING },
-          type: { type: Type.STRING, enum: ["Freelance", "Micro-SaaS", "DigitalProduct"] },
-          description: { type: Type.STRING },
-          matchScore: { type: Type.INTEGER, description: "Percentage match 0-100 based on user profile" },
-          matchReasoning: { type: Type.STRING, description: "Why this fits the user's specific skills" },
-          estimatedValue: { type: Type.STRING, description: "E.g. $50/hr or $500/mo" },
-          platform: { type: Type.STRING },
-          actionPlan: {
-            type: Type.ARRAY,
-            items: { type: Type.STRING },
-            description: "Step by step execution plan"
-          },
-          techStackRecommendation: {
-            type: Type.ARRAY,
-            items: { type: Type.STRING },
-            description: "Recommended tech stack subset"
-          },
-          learningBridge: {
-            type: Type.OBJECT,
-            nullable: true,
-            description: "Only populated if matchScore is between 60-80 and a high value skill is missing.",
-            properties: {
-              missingSkill: { type: Type.STRING },
-              analogy: { type: Type.STRING, description: "Explain it simply using concepts they know" },
-              hoursToLearn: { type: Type.INTEGER },
-              curriculum: { type: Type.ARRAY, items: { type: Type.STRING }, description: "3-4 step crash course" }
-            },
-            required: ["missingSkill", "analogy", "hoursToLearn", "curriculum"]
-          }
-        },
-        required: ["title", "type", "description", "matchScore", "matchReasoning", "actionPlan", "techStackRecommendation"]
-      }
+      items: { type: Type.STRING },
+      description: "Step by step execution plan"
+    },
+    techStackRecommendation: {
+      type: Type.ARRAY,
+      items: { type: Type.STRING },
+      description: "Recommended tech stack subset"
+    },
+    learningBridge: {
+      type: Type.OBJECT,
+      nullable: true,
+      description: "Only populated if matchScore is between 60-80 and a high value skill is missing.",
+      properties: {
+        missingSkill: { type: Type.STRING },
+        analogy: { type: Type.STRING, description: "Explain it simply using concepts they know" },
+        hoursToLearn: { type: Type.INTEGER },
+        curriculum: { type: Type.ARRAY, items: { type: Type.STRING }, description: "3-4 step crash course" }
+      },
+      required: ["missingSkill", "analogy", "hoursToLearn", "curriculum"]
     }
-  }
+  },
+  required: ["title", "type", "description", "matchScore", "matchReasoning", "actionPlan", "techStackRecommendation"]
 };
 
 const spyReportSchema: Schema = {
@@ -82,16 +74,18 @@ export const parseUserProfile = async (text: string): Promise<Partial<UserProfil
     "${text}"
     
     INSTRUCTIONS:
-    - Extract Name, Core Skills, Tech Stack, Resources, Interests.
-    - For "platformTarget": Extract specific platforms if mentioned (Upwork, Fiverr, etc.). IF NOT mentioned, return an empty string "".
-    - Simplify and summarize the values (e.g., convert "I am expert in React and Node" to "React, Node.js").
+    1. Extract specific details (Name, Skills, Stack).
+    2. GENERALIZE THE SKILLS: If the user says "I built a Face Rec system", add "Computer Vision" and "Pattern Recognition" to Core Skills. If they say "I built an E-commerce site", add "Complex State Management" and "Database Architecture".
+    3. For "platformTarget": Extract specific platforms if mentioned. IF NOT mentioned, return an empty string "".
+    
+    Your goal is to capture the *capabilities* of the user, not just the keywords.
   `;
 
   const profileSchema: Schema = {
     type: Type.OBJECT,
     properties: {
       name: { type: Type.STRING },
-      coreSkills: { type: Type.STRING },
+      coreSkills: { type: Type.STRING, description: "Specific skills AND generalized capabilities" },
       techStack: { type: Type.STRING },
       resources: { type: Type.STRING },
       interests: { type: Type.STRING },
@@ -111,37 +105,52 @@ export const parseUserProfile = async (text: string): Promise<Partial<UserProfil
   return JSON.parse(response.text) as Partial<UserProfile>;
 };
 
-export const scanMarketOpportunities = async (profile: UserProfile): Promise<MarketScanResult> => {
-  const modelIdSearch = "gemini-2.5-flash"; // Good for search
-  const modelIdReasoning = "gemini-2.5-flash"; // Good for JSON structure
+// CONTINUOUS DISCOVERY AGENT
+export const discoverNextOpportunity = async (
+  profile: UserProfile, 
+  existingTitles: string[], 
+  onLog?: (msg: string) => void
+): Promise<{ opportunity: Opportunity, source: { title: string, uri: string } | null }> => {
+  
+  const modelIdSearch = "gemini-2.5-flash";
+  const modelIdReasoning = "gemini-2.5-flash";
+  
+  // Phase 1: Brainstorming & Searching (The Radar)
+  onLog?.("Abstracting skills to find lateral opportunities...");
 
-  // Step 1: The Radar (Search Phase)
-  // We use the search tool to get fresh data about the market.
-  // Handle empty platform target by defaulting to broad search
   const targetPlatforms = profile.platformTarget && profile.platformTarget.trim() !== "" 
     ? profile.platformTarget 
-    : "All major platforms (Upwork, Freelancer, Toptal, Indie Hacking, Gumroad, Micro-SaaS marketplaces)";
+    : "Upwork, Freelancer, Gumroad, Micro-SaaS markets";
+
+  const historyContext = existingTitles.length > 0 
+    ? `I have already found these opportunities (DO NOT REPEAT SIMILAR IDEAS): ${existingTitles.join(", ")}.`
+    : "This is the first search.";
 
   const searchPrompt = `
-    Analyze current market demand in late 2024 and 2025 for a developer with the following profile:
-    - Skills: ${profile.coreSkills}
-    - Tech Stack: ${profile.techStack}
-    - Interests: ${profile.interests}
-    - Target Platforms: ${targetPlatforms}
+    You are a Lateral Thinking Talent Manager. Your goal is to find a high-value opportunity by GENERALIZING the user's skills.
+    
+    USER PROFILE:
+    Skills: ${profile.coreSkills}
+    Tech: ${profile.techStack}
+    Interests: ${profile.interests}
+    
+    HISTORY: ${historyContext}
 
-    Find 5-7 specific, high-value opportunities (Freelance gigs, Micro-SaaS ideas, or Digital Products).
+    PROTOCOL - SKILL ABSTRACTION:
+    1.  **Generalize**: If user knows "Facial Recognition", they also know "Computer Vision" -> Look for Vehicle/Object detection jobs.
+    2.  **Transplant**: If user knows "E-commerce (React/Node)", they know "CRUD & Auth" -> Look for LMS, Real Estate Dashboards, or Inventory Systems.
+    3.  **Cross-Pollinate**: Combine their Tech Stack with a random trending industry (AgriTech, LegalTech, EdTech).
+
+    TASK:
+    1. Formulate ONE specific, fresh hypothesis based on this Lateral Thinking.
+    2. Search Google to validate if there is ACTUAL demand for this specific thing right now.
+    3. Look for "Stretch Opportunities" where they might need to learn one small new thing.
     
-    CRITICAL:
-    1. Find "Perfect Matches" (User has 90%+ skills).
-    2. Find "Stretch Opportunities" (High Pay/Demand, but User matches ~70% skills). 
-       Example: User knows React but opportunity needs React + Web3 basics.
-       Example: User knows Python but opportunity needs Python + a specific automation library.
-    
-    Focus on specific problems businesses are paying to solve right now.
+    Focus on: ${targetPlatforms}
   `;
 
-  console.log("Step 1: Scanning Market...");
-  
+  onLog?.("Investigating market demand for lateral concept...");
+
   const searchResponse = await ai.models.generateContent({
     model: modelIdSearch,
     contents: searchPrompt,
@@ -150,72 +159,58 @@ export const scanMarketOpportunities = async (profile: UserProfile): Promise<Mar
     },
   });
 
-  const marketResearchText = searchResponse.text;
+  const marketData = searchResponse.text;
   const groundingChunks = searchResponse.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
   
-  // Extract sources for the UI
-  const sources = groundingChunks
-    .map((chunk: any) => chunk.web ? { title: chunk.web.title, uri: chunk.web.uri } : null)
-    .filter((s: any) => s !== null);
+  // Get the best source for this specific idea
+  const source = groundingChunks.find((c: any) => c.web)?.web || null;
 
-  console.log("Market Data Received. Step 2: Strategizing...");
+  // Phase 2: Synthesis (The Matchmaker)
+  onLog?.("Synthesizing opportunity & calculating fit...");
 
-  // Step 2: The Matchmaker & Strategist (Synthesis Phase)
-  // We feed the search results + profile into the model to get structured JSON.
-  const strategyPrompt = `
-    You are a Talent Manager for a developer named ${profile.name}.
+  const synthesisPrompt = `
+    You are the Matchmaker.
     
-    USER PROFILE:
-    ${JSON.stringify(profile)}
-
-    MARKET RESEARCH DATA (from Google Search):
-    ${marketResearchText}
-
-    TASK:
-    Generate a list of Personalized Opportunities.
+    USER PROFILE: ${JSON.stringify(profile)}
+    MARKET DATA FOUND: ${marketData}
     
-    RULES:
-    1. FILTER: Only keep opportunities where the User's Match Score is > 60%.
-    2. LEARNING BRIDGE: If Match Score is 60-80% and the opportunity is high value, you MUST fill the "learningBridge" field. Explain what tiny skill is missing and how to learn it fast.
-    3. TYPES: Mix Freelance, Micro-SaaS, and Digital Product ideas.
-    4. ACTIONABLE: The "actionPlan" must be specific.
+    Create ONE structured Opportunity based on the research above.
+    
+    CRITICAL RULES:
+    1. **Explain the Pivot**: In 'matchReasoning', explicitly state: "Because you built X, you can build Y".
+    2. If the market data shows NO demand, invent a 'Pivot' strategy based on the data.
+    3. Calculate Match Score carefully.
+    4. If Match Score is 60-80%, generate a 'Learning Bridge'.
   `;
 
-  const strategyResponse = await ai.models.generateContent({
+  const synthesisResponse = await ai.models.generateContent({
     model: modelIdReasoning,
-    contents: strategyPrompt,
+    contents: synthesisPrompt,
     config: {
       responseMimeType: "application/json",
-      responseSchema: opportunitySchema,
-      systemInstruction: "You are an expert technical career strategist. You find the 'Ikigai' intersection. You encourage learning new things if the reward is high.",
-    },
+      responseSchema: opportunitySchema
+    }
   });
 
-  const rawJSON = strategyResponse.text;
-  let opportunities: Opportunity[] = [];
+  const parsedOp = JSON.parse(synthesisResponse.text);
+  const opportunity: Opportunity = {
+    ...parsedOp,
+    id: `op-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+  };
 
-  try {
-    const parsed = JSON.parse(rawJSON);
-    if (parsed.opportunities) {
-      opportunities = parsed.opportunities.map((op: any, index: number) => ({
-        ...op,
-        id: `op-${Date.now()}-${index}`,
-      }));
-    }
-  } catch (e) {
-    console.error("Failed to parse strategy JSON", e);
-  }
+  onLog?.(`Found: ${opportunity.title}`);
 
-  return {
-    opportunities,
-    sources,
-    scannedAt: new Date().toISOString(),
+  return { 
+    opportunity, 
+    source: source ? { title: source.title, uri: source.uri } : null 
   };
 };
 
-export const analyzeCompetitors = async (opportunity: Opportunity): Promise<SpyReport> => {
+export const analyzeCompetitors = async (opportunity: Opportunity, onLog?: (msg: string) => void): Promise<SpyReport> => {
   const modelId = "gemini-2.5-flash";
 
+  onLog?.(`Initializing Niche Spy for "${opportunity.title.substring(0, 30)}"...`);
+  
   const searchPrompt = `
     I have a product/service idea: "${opportunity.title}" (${opportunity.description}).
     Target platform: ${opportunity.platform}.
@@ -226,6 +221,8 @@ export const analyzeCompetitors = async (opportunity: Opportunity): Promise<SpyR
     3. Search for complaints to find weaknesses.
   `;
 
+  onLog?.("Spy Agent searching Google, Reddit & ProductHunt...");
+
   // Step 1: Search for competitor info
   const searchResponse = await ai.models.generateContent({
     model: modelId,
@@ -234,6 +231,8 @@ export const analyzeCompetitors = async (opportunity: Opportunity): Promise<SpyR
       tools: [{ googleSearch: {} }],
     },
   });
+
+  onLog?.("Intel gathered. Analyzing competitor weaknesses...");
 
   const researchData = searchResponse.text;
 
@@ -253,6 +252,8 @@ export const analyzeCompetitors = async (opportunity: Opportunity): Promise<SpyR
     - Calculate $/Hour: Revenue / Effort.
   `;
 
+  onLog?.("Valuation Engine calculating ROI & Effort...");
+
   const analysisResponse = await ai.models.generateContent({
     model: modelId,
     contents: analysisPrompt,
@@ -261,6 +262,8 @@ export const analyzeCompetitors = async (opportunity: Opportunity): Promise<SpyR
       responseSchema: spyReportSchema
     }
   });
+
+  onLog?.("Final Report compiled.");
 
   return JSON.parse(analysisResponse.text) as SpyReport;
 };
