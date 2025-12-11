@@ -8,12 +8,18 @@ export const resetAiClient = () => {
   ai = null;
 };
 
-// Initialization of the Gemini Client using process.env.API_KEY
+// Initialization of the Gemini Client
 const getAiClient = (): GoogleGenAI => {
   if (ai) return ai;
 
-  // STRICT GUIDELINE: Use process.env.API_KEY directly.
-  ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  // PRIORITY: Check Local Storage first (User Input), then fall back to Env Var
+  const apiKey = localStorage.getItem('gemini_api_key') || process.env.API_KEY;
+
+  if (!apiKey) {
+    throw new Error("API Key is missing. Please enter it in the settings.");
+  }
+
+  ai = new GoogleGenAI({ apiKey });
   return ai;
 };
 
