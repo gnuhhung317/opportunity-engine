@@ -3,29 +3,17 @@ import { UserProfile, Opportunity, MarketScanResult, SpyReport } from "../types"
 
 let ai: GoogleGenAI | null = null;
 
-// Helper to check if a key is available without throwing
-export const hasValidApiKey = (): boolean => {
-  const key = localStorage.getItem("gemini_api_key") || process.env.API_KEY;
-  return !!key && key !== "undefined" && key.trim() !== "";
-};
-
-// Helper to reset the client (e.g. when key changes)
+// Helper to reset the client (not strictly needed with env var but kept for API compat)
 export const resetAiClient = () => {
   ai = null;
 };
 
-// Lazy initialization of the Gemini Client
+// Initialization of the Gemini Client using process.env.API_KEY
 const getAiClient = (): GoogleGenAI => {
   if (ai) return ai;
 
-  const key = localStorage.getItem("gemini_api_key") || process.env.API_KEY;
-
-  if (!key || key === "undefined" || key.trim() === "") {
-    throw new Error("API_KEY_MISSING");
-  }
-
-  // @ts-ignore
-  ai = new GoogleGenAI({ apiKey: key });
+  // STRICT GUIDELINE: Use process.env.API_KEY directly.
+  ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   return ai;
 };
 
@@ -34,7 +22,7 @@ const opportunitySchema: Schema = {
   type: Type.OBJECT,
   properties: {
     title: { type: Type.STRING },
-    type: { type: Type.STRING, enum: ["Freelance", "Micro-SaaS", "DigitalProduct"] },
+    type: { type: Type.STRING, enum: ["Freelance", "Micro-SaaS", "DigitalProduct", "Automation/MMO"] },
     description: { type: Type.STRING },
     matchScore: { type: Type.INTEGER, description: "Percentage match 0-100 based on user profile" },
     matchReasoning: { type: Type.STRING, description: "Explain the transfer of skills (e.g. 'Since you know X, you can easily build Y')" },
@@ -43,7 +31,7 @@ const opportunitySchema: Schema = {
     actionPlan: {
       type: Type.ARRAY,
       items: { type: Type.STRING },
-      description: "Step by step execution plan"
+      description: "Step by step execution plan. Focus on 'Selling the outcome' first, then 'Building the bot'. Include specific outreach strategies."
     },
     techStackRecommendation: {
       type: Type.ARRAY,
@@ -99,16 +87,18 @@ export const parseUserProfile = async (text: string): Promise<Partial<UserProfil
     
     INSTRUCTIONS:
     1. Extract specific details (Name, Skills, Stack).
-    2. GENERALIZE THE SKILLS: If the user says "I built a Face Rec system", add "Computer Vision" and "Pattern Recognition" to Core Skills. If they say "I built an E-commerce site", add "Complex State Management" and "Database Architecture".
-    3. For "platformTarget": Extract specific platforms if mentioned. IF NOT mentioned, return an empty string "".
+    2. Extract PROFESSIONAL BACKGROUND: Look for education level (Student, PhD), job titles (Intern, Senior), and years of experience.
+    3. GENERALIZE THE SKILLS: If the user says "I built a Face Rec system", add "Computer Vision" and "Pattern Recognition" to Core Skills.
+    4. For "platformTarget": Extract specific platforms if mentioned. IF NOT mentioned, return an empty string "".
     
-    Your goal is to capture the *capabilities* of the user, not just the keywords.
+    Your goal is to capture the *capabilities* and *experience level* of the user.
   `;
 
   const profileSchema: Schema = {
     type: Type.OBJECT,
     properties: {
       name: { type: Type.STRING },
+      background: { type: Type.STRING, description: "Education, Experience Level, or Current Role" },
       coreSkills: { type: Type.STRING, description: "Specific skills AND generalized capabilities" },
       techStack: { type: Type.STRING },
       resources: { type: Type.STRING },
@@ -130,7 +120,7 @@ export const parseUserProfile = async (text: string): Promise<Partial<UserProfil
   return JSON.parse(response.text) as Partial<UserProfile>;
 };
 
-// CONTINUOUS DISCOVERY AGENT
+// CONTINUOUS DISCOVERY AGENT - DOMAIN ARBITRAGE EDITION
 export const discoverNextOpportunity = async (
   profile: UserProfile, 
   existingTitles: string[], 
@@ -140,73 +130,88 @@ export const discoverNextOpportunity = async (
   const modelIdSearch = "gemini-2.5-flash";
   const modelIdReasoning = "gemini-2.5-flash";
   
-  // Phase 1: Brainstorming & Searching (The Radar)
-  onLog?.("Abstracting skills to find lateral opportunities...");
-
-  const targetPlatforms = profile.platformTarget && profile.platformTarget.trim() !== "" 
-    ? profile.platformTarget 
-    : "Upwork, Freelancer, Gumroad, Micro-SaaS markets";
+  // Phase 1: Brainstorming & Searching (The Pain Point Radar)
+  onLog?.("Scanning non-tech industries for inefficiencies...");
 
   const historyContext = existingTitles.length > 0 
-    ? `I have already found these opportunities (DO NOT REPEAT SIMILAR IDEAS): ${existingTitles.join(", ")}.`
-    : "This is the first search.";
+    ? `Excluding these existing ideas: ${existingTitles.join(", ")}.`
+    : "";
+
+  // LIST OF HIGH-VALUE BORING INDUSTRIES (The "Money" Layers)
+  const targetIndustries = [
+    "Recruitment/Headhunting (High commission, manual filtering)",
+    "Real Estate/Property Management (Paperwork heavy)",
+    "Logistics/Trucking (Dispatching chaos)",
+    "Legal/Compliance (Document parsing)",
+    "Solar/Home Improvement Sales (Lead qualification)",
+    "E-commerce Operations (Inventory reconciliation)",
+    "Local Service Business (Booking/Quoting automation)"
+  ].join("\n");
 
   const searchPrompt = `
-    You are a Lateral Thinking Talent Manager. Your goal is to find a high-value opportunity by GENERALIZING the user's skills.
-    
-    USER PROFILE:
+    You are a "Cross-Industry Arbitrage Expert". Your goal is to find a business opportunity where IT is just the TOOL, not the product.
+
+    USER CAPABILITIES (THE HAMMER):
     Skills: ${profile.coreSkills}
-    Tech: ${profile.techStack}
+    Tech Stack: ${profile.techStack} (Use this to automate manual work)
+    Background: ${profile.background}
     Interests: ${profile.interests}
+    
+    TARGET SEARCH AREA (THE NAIL):
+    Focus on these "Boring but Profitable" industries:
+    ${targetIndustries}
     
     HISTORY: ${historyContext}
 
-    PROTOCOL - SKILL ABSTRACTION:
-    1.  **Generalize**: If user knows "Facial Recognition", they also know "Computer Vision" -> Look for Vehicle/Object detection jobs.
-    2.  **Transplant**: If user knows "E-commerce (React/Node)", they know "CRUD & Auth" -> Look for LMS, Real Estate Dashboards, or Inventory Systems.
-    3.  **Cross-Pollinate**: Combine their Tech Stack with a random trending industry (AgriTech, LegalTech, EdTech).
+    PROTOCOL - "THE TECH-ENABLED SERVICE" MODEL:
+    1.  **Identify the Pain**: Find a highly repetitive, expensive manual task in a non-tech industry (e.g., "Headhunters spend 20 hours/week formatting CVs").
+    2.  **Apply the Leverage**: How can the user's stack (Python/AI/Web) automate 80% of that task?
+    3.  **The Product**: It is NOT "A SaaS for everyone". It is a "Done-For-You Service" run by code, or a specific "Micro-tool" for agencies.
+    4.  **MMO/Automation**: Also consider "Make Money Online" angles like Crypto Affiliate or YouTube Automation if matches user interests, using code as leverage.
 
     TASK:
-    1. Formulate ONE specific, fresh hypothesis based on this Lateral Thinking.
-    2. Search Google to validate if there is ACTUAL demand for this specific thing right now.
-    3. Look for "Stretch Opportunities" where they might need to learn one small new thing.
-    
-    Focus on: ${targetPlatforms}
+    1. Select ONE specific industry from the list (or a related one).
+    2. Search Google for current "operational bottlenecks" or "most time consuming tasks" in that industry in 2024/2025.
+    3. Hypothesize a solution where the User builds a "Robot employee" to solve it.
+
+    EXAMPLE (Do not copy):
+    - *Industry:* Headhunting.
+    - *Problem:* recruiters manually match LinkedIn profiles to Job Descriptions.
+    - *Solution:* A Python script that scrapes LinkedIn, scores candidates using Gemini API, and emails the recruiter the top 5 matches every morning.
   `;
 
-  onLog?.("Investigating market demand for lateral concept...");
+  onLog?.("Investigating industry bottlenecks...");
 
   const client = getAiClient();
   const searchResponse = await client.models.generateContent({
     model: modelIdSearch,
     contents: searchPrompt,
     config: {
-      tools: [{ googleSearch: {} }],
+      tools: [{ googleSearch: {} }], 
     },
   });
 
   const marketData = searchResponse.text;
   const groundingChunks = searchResponse.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
-  
-  // Get the best source for this specific idea
   const source = groundingChunks.find((c: any) => c.web)?.web || null;
 
-  // Phase 2: Synthesis (The Matchmaker)
-  onLog?.("Synthesizing opportunity & calculating fit...");
+  // Phase 2: Synthesis (The Business Architect)
+  onLog?.("Architecting the tech-enabled solution...");
 
   const synthesisPrompt = `
-    You are the Matchmaker.
-    
-    USER PROFILE: ${JSON.stringify(profile)}
-    MARKET DATA FOUND: ${marketData}
-    
-    Create ONE structured Opportunity based on the research above.
-    
-    CRITICAL RULES:
-    1. **Explain the Pivot**: In 'matchReasoning', explicitly state: "Because you built X, you can build Y".
-    2. If the market data shows NO demand, invent a 'Pivot' strategy based on the data.
-    3. Calculate Match Score carefully.
-    4. If Match Score is 60-80%, generate a 'Learning Bridge'.
+    You are a Venture Architect. Create a concrete Opportunity Profile based on the research.
+
+    USER STACK: ${profile.techStack}
+    MARKET PAIN POINT FOUND: ${marketData}
+
+    CRITICAL INSTRUCTIONS:
+    1. **Title**: Must sound like a Business Solution, not a Dev Project (e.g., "Automated Headhunter Assistant" NOT "LinkedIn Scraper Script").
+    2. **Type**: Classify as "Automation/MMO" or "Micro-SaaS".
+    3. **Match Reasoning**: Explain why their SPECIFIC stack makes them dangerous in this non-tech field. (e.g. "Because you know Puppeteer/Selenium, you can replace a Data Entry Clerk").
+    4. **Action Plan**: Focus on "Selling the outcome" first, then "Building the bot".
+    5. **BANNED**: Do not suggest building "Developer Tools", "IDEs", or "Libraries". Focus on B2B Services or Niche Tools.
+
+    Generate the JSON matching the Schema.
   `;
 
   const synthesisResponse = await client.models.generateContent({
@@ -219,6 +224,8 @@ export const discoverNextOpportunity = async (
   });
 
   const parsedOp = JSON.parse(synthesisResponse.text);
+  
+  // Post-processing to ensure ID exists
   const opportunity: Opportunity = {
     ...parsedOp,
     id: `op-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
@@ -242,8 +249,8 @@ export const analyzeCompetitors = async (opportunity: Opportunity, onLog?: (msg:
     Target platform: ${opportunity.platform}.
     
     Perform a competitive analysis and pricing research:
-    1. Search for existing competitors or alternatives on Google, Reddit, and ProductHunt.
-    2. Search for PRICING of similar services (monthly subs, hourly rates, fixed project costs).
+    1. Search for existing competitors or alternatives on Google, Reddit, ProductHunt, and YouTube.
+    2. Search for PRICING of similar services (monthly subs, hourly rates, fixed project costs, or affiliate commissions).
     3. Search for complaints to find weaknesses.
   `;
 

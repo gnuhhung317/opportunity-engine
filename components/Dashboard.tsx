@@ -59,7 +59,7 @@ const Dashboard: React.FC<DashboardProps> = ({ user }) => {
 
   // CONTINUOUS DISCOVERY LOOP
   useEffect(() => {
-    let timeoutId: NodeJS.Timeout;
+    let timeoutId: ReturnType<typeof setTimeout>; // Fixed: Use ReturnType<typeof setTimeout> instead of NodeJS.Timeout
 
     const engineLoop = async () => {
       if (!isScanning) return;

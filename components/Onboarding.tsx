@@ -10,6 +10,7 @@ interface OnboardingProps {
 const Onboarding: React.FC<OnboardingProps> = ({ onComplete, initialData }) => {
   const [formData, setFormData] = useState<UserProfile>({
     name: '',
+    background: '',
     coreSkills: '',
     techStack: '',
     resources: '',
@@ -48,6 +49,7 @@ const Onboarding: React.FC<OnboardingProps> = ({ onComplete, initialData }) => {
         ...result,
         // Ensure values are strings
         name: result.name || prev.name,
+        background: result.background || prev.background,
         coreSkills: result.coreSkills || prev.coreSkills,
         techStack: result.techStack || prev.techStack,
         resources: result.resources || prev.resources,
@@ -70,7 +72,7 @@ const Onboarding: React.FC<OnboardingProps> = ({ onComplete, initialData }) => {
           {initialData ? "Recalibrate Your Digital Twin" : "Initialize Your Digital Twin"}
         </h2>
         <p className="text-slate-400">
-          {initialData ? "Update your parameters to find better matches." : "Tell us what you have. We'll find who needs it."}
+          {initialData ? "Update your parameters to find better matches." : "Tell us who you are and what you have. We'll find who needs it."}
         </p>
       </div>
 
@@ -94,7 +96,7 @@ const Onboarding: React.FC<OnboardingProps> = ({ onComplete, initialData }) => {
               <textarea
                 value={rawInput}
                 onChange={(e) => setRawInput(e.target.value)}
-                placeholder="Example: My name is Huy, I'm a Senior React Developer with 5 years experience. I know Next.js, Tailwind, and Node.js. I have about 10 hours a week to spare and want to build Micro-SaaS products."
+                placeholder="Example: My name is Huy, 4th year CS student. I interned as a Backend Dev for 6 months using Node.js. I want to build automated tools."
                 className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition-all min-h-[120px]"
               />
               <button
@@ -116,17 +118,31 @@ const Onboarding: React.FC<OnboardingProps> = ({ onComplete, initialData }) => {
 
         <form onSubmit={handleSubmit} className="space-y-6 border-t border-slate-800 pt-6">
           
-          <div>
-            <label className="block text-sm font-medium text-slate-300 mb-1">Your Name / Handle</label>
-            <input
-              type="text"
-              name="name"
-              required
-              className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500 focus:border-transparent outline-none transition-all"
-              placeholder="e.g. Alex"
-              value={formData.name}
-              onChange={handleChange}
-            />
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div>
+              <label className="block text-sm font-medium text-slate-300 mb-1">Your Name / Handle</label>
+              <input
+                type="text"
+                name="name"
+                required
+                className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500 focus:border-transparent outline-none transition-all"
+                placeholder="e.g. Alex"
+                value={formData.name}
+                onChange={handleChange}
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-300 mb-1">Background / Experience</label>
+              <input
+                type="text"
+                name="background"
+                required
+                className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500 focus:border-transparent outline-none transition-all"
+                placeholder="e.g. 4th year Student, Senior Dev, etc."
+                value={formData.background}
+                onChange={handleChange}
+              />
+            </div>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">

@@ -1,5 +1,6 @@
 export interface UserProfile {
   name: string;
+  background: string; // New field: e.g. "4th year CS student, 6mo internship"
   coreSkills: string; // e.g., "React, Python, Copywriting"
   techStack: string; // e.g., "Next.js, Supabase, Tailwind"
   resources: string; // e.g., "4 hours/day, $0 budget"
@@ -7,7 +8,7 @@ export interface UserProfile {
   platformTarget: string; // e.g., "Upwork, Gumroad"
 }
 
-export type OpportunityType = 'Freelance' | 'Micro-SaaS' | 'DigitalProduct';
+export type OpportunityType = 'Freelance' | 'Micro-SaaS' | 'DigitalProduct' | 'Automation/MMO';
 
 export interface Valuation {
   estimatedEffortHours: number;
